@@ -46,9 +46,9 @@
     "open_in_tab": false
   },
   "manifest_version": 2,
-  "applications": {
+  "browser_specific_settings": {
     "gecko": {
-      "id": "let.us.roll.together@gmail.com",
+      "id": "roll-with-your-friends@pazuluda",
       "strict_min_version": "109.0"
     }
   }
