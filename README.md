@@ -6,6 +6,27 @@ I believe this extension's purpose was completed as we went through the pandemic
 
 I want to leave a huge thanks to everyone who contributed to this project.
 
+## Sync improvements in this fork
+- **No more echo / ping-pong**: the content script keeps its own picture of the room and only
+  sends a player change when it really differs from it. Changes applied after a remote update
+  are never sent back. Jumps (like "Skip intro") are detected with the `seeking` event.
+- **Skipping the opening**: friends load the jump in parallel; whoever finishes loading last
+  tells the room where they really are, so the others wait instead of staying seconds apart.
+  A light drift correction keeps everybody within about a second.
+- **Joining**: the room state is applied once the Crunchyroll player has loaded (it used to be
+  overwritten by Crunchyroll's own "continue watching" position). When the browser blocks
+  autoplay, a "join playback" button appears: one click instead of spamming the space bar.
+  Tip for Firefox: allow autoplay for crunchyroll.com (padlock in the address bar → Autoplay).
+- **Late joiners and reconnections**: the server resets the room to "paused" at its last stored
+  position whenever someone (re)connects; members now ignore that reset and re-send the real
+  state, so nobody gets paused and rewound. A dropped connection rejoins the same room.
+- **Robustness**: only the frame that holds the player talks to the background script, a page
+  reload (F5) brings the tab back in sync, disconnecting stops the sync on the page, and the
+  Firefox background page is persistent.
+
+The sync logic lives in `src/sync.ts` and is checked by a simulation of several friends with
+different connections (`npm run test:sync`).
+
 ## Browser Support
 - **Chrome/Chromium**: Manifest V3 (Chrome 116+)
 - **Firefox**: Manifest V2 (Firefox 109+)

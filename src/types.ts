@@ -55,8 +55,15 @@ export type Message =
   | { type: MessageTypes.PORT_CONNECTION; name: PortName }
   | {
       type: MessageTypes.SW2CS_REMOTE_UPDATE;
+      // "join": this tab (re)entered the room, "update": the room changed
+      kind: "join" | "update";
+      // join caused by a reconnection while the page was already in the room
+      rejoin?: boolean;
       roomState: States;
       roomProgress: number;
+      userCount: number;
+      // socket id of the friend at the origin of an update
+      senderId?: string;
     }
   | { type: MessageTypes.SW2CS_ROOM_CONNECTION }
   | { type: MessageTypes.SW2PU_SEND_ROOM_ID; roomId: string }
@@ -82,11 +89,20 @@ export interface StorageData {
   colorOptions?: string[];
 }
 
+export interface RoomStatus {
+  state: States;
+  progress: number;
+  userCount: number;
+  at: number; // Date.now() when this status was known
+}
+
 export interface TabInfo {
   tabId: number;
   port: chrome.runtime.Port;
   socket?: SocketIOClient.Socket;
   roomId?: string;
+  // Last known room status, used to bring a reloaded page back in sync
+  room?: RoomStatus;
   sentConnectionRequest: boolean;
 }
 

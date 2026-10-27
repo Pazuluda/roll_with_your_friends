@@ -1,6 +1,6 @@
 import _, { get } from "lodash";
 import { Radius, StorageData } from "./types";
-import { extensionAPI } from "./browser-compat";
+import { extensionAPI, getActionAPI } from "./browser-compat";
 
 declare const process: any;
 
@@ -107,7 +107,8 @@ export async function setIconColor(
   ctx.fillText("RT", canvas.width / 2, canvas.height / 2 + 32);
 
   const imageData = ctx.getImageData(0, 0, 128, 128);
-  chrome.action.setIcon({
+  // chrome.action does not exist in Firefox (Manifest V2 uses browserAction)
+  getActionAPI().setIcon({
     imageData,
   });
 

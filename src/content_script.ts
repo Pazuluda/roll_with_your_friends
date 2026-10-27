@@ -1,190 +1,182 @@
-import _ from "lodash";
-
-import { LIMIT_DELTA_TIME, log, getEnumKeys } from "./common";
-
-import {
-  States,
-  Actions,
-  PlayerStateProp,
-  MessageTypes,
-  Message,
-  PortName,
-} from "./types";
+import { log } from "./common";
+import { SyncController } from "./sync";
+import { Message, MessageTypes, PortName } from "./types";
 import { extensionAPI } from "./browser-compat";
 
-const g_port = extensionAPI.runtime.connect({ name: PortName.CONTENT_SCRIPT });
+// Crunchyroll players: the old one ("player0") and the Bitmovin one
+// ("bitmovinplayer-video-<container id>", currently "bitmovinplayer-video-null").
+const KNOWN_PLAYER_SELECTORS = ["#player0", 'video[id^="bitmovinplayer-video"]'];
+const PLAYER_POLL_MS = 500;
+const HEART_BEAT_MS = 20000; // Keeps the Chrome service worker alive while connected
 
-const ignoreNext: { [index: string]: boolean } = {};
-let g_player: HTMLVideoElement | undefined = undefined;
-let g_lastFrameProgress: number | undefined = undefined;
-let g_heartBeatInterval: NodeJS.Timeout | undefined = undefined; // Keeps Service Worker alive while connected
-let g_pendingMessages: Message[] = [];
-let g_playPromise: Promise<void> | undefined = undefined;
+let g_port: chrome.runtime.Port | undefined = undefined;
+let g_video: HTMLVideoElement | undefined = undefined;
+let g_heartBeatInterval: ReturnType<typeof setInterval> | undefined = undefined;
+let g_overlay: HTMLButtonElement | undefined = undefined;
 
-function getState(stateName: PlayerStateProp): boolean | number {
-  return g_player![stateName];
+const sync = new SyncController(
+  {
+    now: () => performance.now(),
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  },
+  {
+    send: (state, currentProgress) => {
+      g_port?.postMessage({
+        type: MessageTypes.CS2SW_LOCAL_UPDATE,
+        state,
+        currentProgress,
+      });
+    },
+    onAutoplayBlocked: (blocked) => (blocked ? showJoinButton() : hideJoinButton()),
+    log: (...args) => log("[sync]", ...args),
+  }
+);
+
+// ------------------------------------------------------------------ player
+
+function isVideo(element: Element | null): element is HTMLVideoElement {
+  return !!element && element.tagName === "VIDEO";
 }
 
-function getStates(): {
-  state: States;
-  currentProgress: number;
-  timeJump: boolean;
-} {
-  const [paused, currentProgress]: [boolean, number] = [
-    getState("paused") as boolean,
-    getState("currentTime") as number,
-  ];
+function findVideo(): HTMLVideoElement | undefined {
+  for (const selector of KNOWN_PLAYER_SELECTORS) {
+    const element = document.querySelector(selector);
+    if (isVideo(element)) return element;
+  }
 
-  g_lastFrameProgress = g_lastFrameProgress || currentProgress;
-
-  const timeJump: boolean =
-    Math.abs(currentProgress - g_lastFrameProgress) > LIMIT_DELTA_TIME;
-  const state: States = paused ? States.PAUSED : States.PLAYING;
-
-  g_lastFrameProgress = currentProgress;
-  return { state, currentProgress, timeJump };
+  // Fallback if Crunchyroll renames its player again: the biggest video on the page
+  let best: HTMLVideoElement | undefined = undefined;
+  let bestArea = 0;
+  for (const video of Array.from(document.querySelectorAll("video"))) {
+    const rect = video.getBoundingClientRect();
+    const area = rect.width * rect.height;
+    if (area > bestArea) {
+      best = video;
+      bestArea = area;
+    }
+  }
+  return best;
 }
 
-const handleLocalAction = (action: Actions) => (): void => {
-  if (ignoreNext[action] === true) {
-    ignoreNext[action] = false;
-    return;
+function watchForPlayer(): void {
+  const video = findVideo();
+  if (video && video !== g_video) {
+    log("Player found", video.id);
+    g_video = video;
+    sync.attach(video);
+    // Only the frame that actually holds the player talks to the background
+    // script, otherwise other Crunchyroll frames could steal the connection.
+    connectPort();
   }
-
-  const {
-    state,
-    currentProgress,
-    timeJump,
-  }: { state: States; currentProgress: number; timeJump: boolean } =
-    getStates();
-  const type = MessageTypes.CS2SW_LOCAL_UPDATE;
-
-  log("Local Action", action, { type, state, currentProgress, timeJump });
-  switch (action) {
-    case Actions.PLAY:
-    case Actions.PAUSE:
-      g_port.postMessage({ type, state, currentProgress });
-      break;
-    case Actions.TIME_UPDATE:
-      if (timeJump) {
-        g_port.postMessage({ type, state, currentProgress });
-      }
-      break;
-  }
-};
-
-function triggerAction(action: Actions, progress: number): void {
-  if (_.isNil(g_player)) {
-    log("Player is Undefined so no action will be triggered");
-    return;
-  }
-  ignoreNext[action] = true;
-
-  switch (action) {
-    case Actions.PAUSE:
-      if (g_playPromise) {
-        g_playPromise.then(() => {
-          g_player!.pause();
-          g_player!.currentTime = progress;
-        }).catch(_.noop);
-        g_playPromise = undefined;
-      } else {
-        g_player.pause();
-        g_player.currentTime = progress;
-      }
-      break;
-    case Actions.PLAY:
-      g_playPromise = g_player.play();
-      g_playPromise.catch(_.noop);
-      if (Math.abs(g_player.currentTime - progress) > LIMIT_DELTA_TIME) {
-        g_player.currentTime = progress;
-      }
-      break;
-    case Actions.TIME_UPDATE:
-      g_player.currentTime = progress;
-      break;
-    default:
-      ignoreNext[action] = false;
-  }
+  setTimeout(watchForPlayer, PLAYER_POLL_MS);
 }
 
-function sendRoomConnectionMessage(): void {
-  const { state, currentProgress }: { state: States; currentProgress: number } =
-    getStates();
-  const type = MessageTypes.CS2SW_ROOM_CONNECTION;
-  g_port.postMessage({ state, currentProgress, type });
+// ------------------------------------------------------------------ background script
+
+function connectPort(): void {
+  if (g_port) return;
+  g_port = extensionAPI.runtime.connect({ name: PortName.CONTENT_SCRIPT });
+  g_port.onMessage.addListener(handleServiceWorkerMessage);
+  g_port.onDisconnect.addListener(() => {
+    // Extension reloaded or updated: this page is no longer connected
+    log("Port disconnected");
+    g_port = undefined;
+    stopHeartBeat();
+    sync.leaveRoom();
+  });
 }
 
-function handleRemoteUpdate(message: Message): void {
-  if (message.type != MessageTypes.SW2CS_REMOTE_UPDATE) {
-    throw "Invalid Message Type: " + message.type;
-  }
-  const { roomState, roomProgress } = message;
-  log("Handling Remote Update", { roomState, roomProgress });
-
-  const { state, currentProgress }: { state: States; currentProgress: number } =
-    getStates();
-  if (state !== roomState) {
-    if (roomState === States.PAUSED) triggerAction(Actions.PAUSE, roomProgress);
-    if (roomState === States.PLAYING) triggerAction(Actions.PLAY, roomProgress);
-  }
-
-  if (Math.abs(roomProgress - currentProgress) > LIMIT_DELTA_TIME) {
-    triggerAction(Actions.TIME_UPDATE, roomProgress);
-  }
+function startHeartBeat(): void {
+  if (g_heartBeatInterval) return;
+  g_heartBeatInterval = setInterval(
+    () => g_port?.postMessage({ type: MessageTypes.CS2SW_HEART_BEAT }),
+    HEART_BEAT_MS
+  );
 }
 
-function handleServiceWorkerMessage(serviceWorkerMessage: Message) {
-  if (!g_player) {
-    log("Player not ready, queuing message", serviceWorkerMessage);
-    g_pendingMessages.push(serviceWorkerMessage);
-    return;
-  }
+function stopHeartBeat(): void {
+  if (g_heartBeatInterval) clearInterval(g_heartBeatInterval);
+  g_heartBeatInterval = undefined;
+}
 
-  log("Received message from Background", serviceWorkerMessage);
+function handleServiceWorkerMessage(message: Message): void {
+  log("Received message from Background", message);
 
-  switch (serviceWorkerMessage.type) {
-    case MessageTypes.SW2CS_ROOM_CONNECTION:
-      g_heartBeatInterval = setInterval(
-        () => g_port.postMessage({ type: MessageTypes.CS2SW_HEART_BEAT }),
-        20000
-      );
-      sendRoomConnectionMessage();
+  switch (message.type) {
+    case MessageTypes.SW2CS_ROOM_CONNECTION: {
+      const { state, progress } = sync.snapshot();
+      g_port?.postMessage({
+        type: MessageTypes.CS2SW_ROOM_CONNECTION,
+        state,
+        currentProgress: progress,
+      });
       break;
+    }
     case MessageTypes.SW2CS_REMOTE_UPDATE:
-      handleRemoteUpdate(serviceWorkerMessage);
+      startHeartBeat();
+      sync.handleRemote({
+        kind: message.kind,
+        rejoin: message.rejoin,
+        state: message.roomState,
+        progress: message.roomProgress,
+        userCount: message.userCount,
+        senderId: message.senderId,
+      });
       break;
     case MessageTypes.SW2CS_ROOM_DISCONNECT:
-      if (g_heartBeatInterval) {
-        clearInterval(g_heartBeatInterval);
-      }
+      stopHeartBeat();
+      sync.leaveRoom();
       break;
     default:
-      throw "Invalid BackgroundMessageType: " + serviceWorkerMessage.type;
+      log("Ignoring unknown message", message);
   }
 }
 
-function runContentScript() {
-  g_player = (document.getElementById("player0") || document.getElementById("bitmovinplayer-video-null")) as HTMLVideoElement;
+// ------------------------------------------------------------------ "join playback" button
+// Firefox refuses to start a video with sound until the user has clicked on the
+// page. When that happens we show a button: one click and the video joins the room.
 
-  if (!g_player) {
-    setTimeout(runContentScript, 500);
-    return;
-  }
-
-  for (const action of getEnumKeys(Actions)) {
-    g_player.addEventListener(
-      Actions[action],
-      handleLocalAction(Actions[action])
-    );
-  }
-
-  // Replay any messages that arrived before the player was ready
-  const pending = g_pendingMessages.splice(0);
-  for (const msg of pending) {
-    handleServiceWorkerMessage(msg);
-  }
+function showJoinButton(): void {
+  if (g_overlay) return;
+  const button = document.createElement("button");
+  button.textContent = "▶ Roll Together : clique ici pour rejoindre la lecture";
+  Object.assign(button.style, {
+    position: "fixed",
+    left: "50%",
+    bottom: "18%",
+    transform: "translateX(-50%)",
+    zIndex: "2147483647",
+    padding: "14px 22px",
+    font: "600 16px/1.2 system-ui, sans-serif",
+    color: "#ffffff",
+    background: "#F78C25",
+    border: "none",
+    borderRadius: "8px",
+    boxShadow: "0 4px 16px rgba(0, 0, 0, 0.45)",
+    cursor: "pointer",
+  });
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    hideJoinButton();
+    sync.resumeFromUserGesture();
+  });
+  g_overlay = button;
+  placeJoinButton();
 }
 
-g_port.onMessage.addListener(handleServiceWorkerMessage);
-runContentScript();
+function placeJoinButton(): void {
+  if (!g_overlay) return;
+  // In fullscreen only the fullscreen element is visible
+  (document.fullscreenElement ?? document.body).appendChild(g_overlay);
+}
+
+function hideJoinButton(): void {
+  g_overlay?.remove();
+  g_overlay = undefined;
+}
+
+document.addEventListener("fullscreenchange", placeJoinButton);
+
+watchForPlayer();
