@@ -1,101 +1,104 @@
-# Roll Together
-Roll Together is a browser extension for Google Chrome and Mozilla Firefox. It synchronizes Crunchyroll Videos that are being played at multiple computers.
+# Roll With Your Friends (Roll Together)
 
-## Retirement note
-I believe this extension's purpose was completed as we went through the pandemic and were able to still feel close our friends, at least while we watched anime. Since then, several other forks and new extensions with similar purposes were created. Finally, the maintainance cost, as an totally free open source project, increased with manifest v3, changes in the crunchyroll player and pushbacks from Google to publish fixes.
+Extension Firefox pour regarder Crunchyroll à plusieurs, chacun chez soi, parfaitement synchronisés :
+lecture, pause, skip d'opening et retours en arrière sont répercutés chez tout le monde.
 
-I want to leave a huge thanks to everyone who contributed to this project.
+Ce dépôt est un fork de [Roll Together](https://github.com/samuraiexx/roll_together), dont l'auteur a arrêté
+la maintenance. Ce fork corrige la synchronisation sur le lecteur actuel de Crunchyroll.
 
-## Sync improvements in this fork
-- **No more echo / ping-pong**: the content script keeps its own picture of the room and only
-  sends a player change when it really differs from it. Changes applied after a remote update
-  are never sent back. Jumps (like "Skip intro") are detected with the `seeking` event.
-- **Skipping the opening**: friends load the jump in parallel; whoever finishes loading last
-  tells the room where they really are, so the others wait instead of staying seconds apart.
-  A light drift correction keeps everybody within about a second.
-- **Joining**: the room state is applied once the Crunchyroll player has loaded (it used to be
-  overwritten by Crunchyroll's own "continue watching" position). When the browser blocks
-  autoplay, a "join playback" button appears: one click instead of spamming the space bar.
-  Tip for Firefox: allow autoplay for crunchyroll.com (padlock in the address bar → Autoplay).
-- **Late joiners and reconnections**: the server resets the room to "paused" at its last stored
-  position whenever someone (re)connects; members now ignore that reset and re-send the real
-  state, so nobody gets paused and rewound. A dropped connection rejoins the same room.
-- **Robustness**: only the frame that holds the player talks to the background script, a page
-  reload (F5) brings the tab back in sync, disconnecting stops the sync on the page, and the
-  Firefox background page is persistent.
+## Installer (Firefox)
 
-The sync logic lives in `src/sync.ts` and is checked by a simulation of several friends with
-different connections (`npm run test:sync`).
+**[⬇️ Télécharger Roll Together 3.3.3 (signé par Mozilla)](https://addons.mozilla.org/firefox/downloads/file/5178345/d4fdb89d0bb0496b932e-3.3.3.xpi)**
 
-## Browser Support
-- **Chrome/Chromium**: Manifest V3 (Chrome 116+)
-- **Firefox**: Manifest V2 (Firefox 109+)
+1. Si tu avais une ancienne version de Roll Together : `about:addons` → Roll Together → « … » → **Supprimer**.
+2. Clique sur le lien ci-dessus, puis sur **« Ajouter »**.
+   Si le fichier se télécharge au lieu de s'installer : fais-le glisser dans une fenêtre Firefox,
+   ou `about:addons` → roue dentée ⚙️ → **« Installer un module depuis un fichier… »**.
+3. Conseillé : sur crunchyroll.com, cadenas à gauche de l'adresse → **Lecture automatique** →
+   **« Autoriser l'audio et la vidéo »**. Sinon, un bouton orange « clique ici pour rejoindre la
+   lecture » s'affiche à ton arrivée : un clic suffit.
 
-## Download
-- **Chrome**: [Chrome Web Store](https://chrome.google.com/webstore/detail/ilpfeljgdikoabaclkjgkbeegeoijfca)
-- **Firefox**: Available as a signed add-on (coming soon)
+Tout le monde dans le salon doit avoir **la même version** (3.3.3).
 
-## Development Setup
+## Utilisation
 
-### Prerequisites
-- Node.js and npm
+1. Ouvre un épisode sur Crunchyroll.
+2. Clique sur l'icône de l'extension → **Create Room** → **Copy URL**.
+3. Envoie le lien à tes potes : ils l'ouvrent dans Firefox, et vous êtes synchronisés.
+
+## Ce qui a changé dans ce fork
+
+### Ce qui était cassé dans l'original
+- **Skip de l'opening = désynchro** : l'extension renvoyait au salon les changements qu'elle venait
+  elle-même d'appliquer, d'où un ping-pong entre les potes.
+- **Premier lancement** : il fallait marteler la barre d'espace, car la synchro était appliquée avant
+  que le lecteur Crunchyroll ait fini de charger, et Firefox bloquait la lecture automatique.
+- **Arrivée en cours de route ou coupure réseau** : le serveur remettait tout le monde en pause,
+  à une ancienne position.
+- **Lecteur figé** : le lecteur de Crunchyroll (Bitmovin) charge la vidéo lui-même. L'extension
+  déplaçait directement la vidéo, sans passer par lui, et l'image se figeait.
+
+### Ce que fait la version 3.3
+- **Pilote le lecteur Crunchyroll lui-même pour les sauts** : l'extension retrouve le lecteur dans la
+  page (`viewModelContainer` → `_player`) et lui demande de sauter, ce qui le fait charger
+  correctement. Le premier saut est vérifié. Si le lecteur est introuvable, elle passe par les
+  boutons « ±10 secondes » de Crunchyroll.
+- **Pas d'écho** : un changement n'est envoyé aux autres que s'il vient vraiment de toi (lecture,
+  pause, skip, barre de progression). Ni un lecteur figé ou en retard, ni la petite pause que
+  Crunchyroll fait avant chaque saut ne sont envoyés.
+- **Petits écarts rattrapés en douceur** : jusqu'à 5 s d'écart, la vidéo accélère un peu (×1,5 max)
+  si tu es en retard, ou fait une courte pause si tu es en avance. Aucun saut, donc aucun
+  rechargement.
+- **Arrivée dans le salon** : l'extension attend que le lecteur Crunchyroll ait fini de démarrer
+  (il se place d'abord à ton point de reprise), puis te place à la position des autres. Si Firefox
+  bloque la lecture, un bouton « clique ici pour rejoindre la lecture » apparaît.
+- **Arrivées tardives et reconnexions** : la remise en pause du serveur est ignorée, et le vrai état
+  est renvoyé, pour que personne ne soit remis en pause ou ramené en arrière. Une coupure réseau
+  te replace dans le même salon.
+- **Messages croisés** (deux personnes qui agissent en même temps) : l'état du salon est reconfirmé
+  pour que tout le monde finisse au même endroit.
+- **Robustesse** : un F5 te resynchronise tout seul, se déconnecter arrête la synchro sur la page,
+  et la page d'arrière-plan Firefox est persistante.
+
+### Tests
+- `test/sync.sim.ts` : simulation de plusieurs potes, avec des connexions et des temps de chargement
+  différents, et un lecteur qui se comporte comme celui de Crunchyroll (pause avant les sauts, image
+  figée si on déplace la vidéo directement, lecture automatique bloquée). Des milliers de séances
+  aléatoires finissent toutes synchronisées.
+- `test/driver.test.ts` : vérifie que le lecteur est retrouvé dans des structures comme celle de
+  Crunchyroll.
+- `npm run test:sync` lance les deux.
+
+Le code de synchronisation est dans `src/sync.ts`, le pilotage du lecteur Crunchyroll dans
+`src/crunchyroll_driver.ts`.
+
+## Développement
+
+### Prérequis
+- Node.js et npm
 - Git
 
-### Building the Extension
-
-#### For Chrome (Manifest V3):
+### Compiler
 ```bash
 npm install
-npm run build:chrome
-# Output will be in the 'build' directory
+npm run build:production:firefox   # extension dans build-firefox/
+npm run build:production:chrome    # extension dans build/
+npm run package                    # crée rolltogether-firefox.zip et rolltogether-chrome.zip
 ```
 
-#### For Firefox (Manifest V2):
-```bash
-npm install
-npm run build:firefox
-# Output will be in the 'build-firefox' directory
-```
+En développement (`npm run build:firefox` ou `npm run watch:firefox`), l'extension écrit dans la
+console de la page tout ce qu'elle fait (`[sync]`, `[driver]`), ce qui aide à diagnostiquer un problème.
 
-#### For both browsers:
-```bash
-npm run build:production:chrome
-npm run build:production:firefox
-npm run package
-# Creates rolltogether-chrome.zip and rolltogether-firefox.zip
-```
+### Charger depuis les sources
+- **Firefox** : `about:debugging` → « Ce Firefox » → « Charger un module complémentaire temporaire »
+  → choisir un fichier du dossier `build-firefox`.
+- **Chrome** : `chrome://extensions` → Mode développeur → « Charger l'extension non empaquetée »
+  → dossier `build`. Les corrections de ce fork n'ont été testées que sur Firefox.
 
-### Development Mode
-```bash
-# Watch mode for Chrome
-npm run watch:chrome
+## Serveur de synchronisation
+L'extension utilise toujours le serveur de l'auteur d'origine (`rt-sync.azurewebsites.net`,
+code : https://github.com/samuraiexx/roll_together_backend). S'il venait à s'arrêter, il faudrait
+héberger ce serveur et changer `SYNC_SERVER` dans `env.json`.
 
-# Watch mode for Firefox
-npm run watch:firefox
-```
-
-## Installation from Source
-
-### Chrome/Chromium
-1. Open the Extension Management page by navigating to chrome://extensions.
-2. Enable Developer Mode by clicking the toggle switch next to Developer mode.
-3. Click the LOAD UNPACKED button and select the `build` directory.
-
-### Firefox
-1. Navigate to about:debugging
-2. Click "This Firefox"
-3. Click "Load Temporary Add-on"
-4. Select any file in the `build-firefox` directory
-
-![](https://developer.chrome.com/static/images/get_started/load_extension.png)
-
-## TODO
-- [x] Customizable Palette
-- [x] Improve Logo/Name
-- [x] Improve structure to allow more than one tab at the same time
-- [x] Firefox Browser Support
-- [ ] Work with autoplay
-- [ ] Create a Website
-
-## Related Repos
-Backend repo: https://github.com/samuraiexx/roll_together_backend
+## Remerciements
+Merci à l'auteur d'origine de Roll Together et à tous ses contributeurs.
