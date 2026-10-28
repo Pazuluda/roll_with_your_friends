@@ -111,6 +111,9 @@ interface Quirks {
   freezeAfterExternalSeek?: boolean;
   // how long after the jump the self-paused player starts again (ms)
   resumeDelayMs?: number;
+  // Crunchyroll on arrival: a jump made from outside while the player is still
+  // starting (loading, going to its resume point) leaves it frozen
+  freezeIfMovedDuringStartup?: boolean;
 }
 
 class FakePlayer implements VideoLike {
@@ -131,6 +134,8 @@ class FakePlayer implements VideoLike {
   private seekTask?: Task;
   private firstCanPlay = true;
   private userSeeking = false;
+  private internalSeeking = false;
+  private startedAt = Infinity;
   frozen = false;
   private autoplayOnLoad = false;
 
@@ -154,8 +159,10 @@ class FakePlayer implements VideoLike {
   }
 
   set currentTime(target: number) {
-    const fromUser = this.userSeeking;
+    const fromUser = this.userSeeking || this.internalSeeking;
     this.userSeeking = false;
+    this.internalSeeking = false;
+    const duringStartup = this.sim.now < this.startedAt + 1000;
     this.frozen = false;
     this.freeze();
     this.pos = target;
@@ -185,7 +192,11 @@ class FakePlayer implements VideoLike {
       this.readyState = 4;
       const wasStalled = this.stalled;
       this.stalled = false;
-      if (this.quirks.freezeAfterExternalSeek && !fromUser && !isBuffered) {
+      if (
+        !fromUser &&
+        ((this.quirks.freezeAfterExternalSeek && !isBuffered) ||
+          (this.quirks.freezeIfMovedDuringStartup && duringStartup))
+      ) {
         this.stalled = true;
         this.frozen = true;
       }
@@ -205,6 +216,7 @@ class FakePlayer implements VideoLike {
       }
       if (this.firstCanPlay) {
         this.firstCanPlay = false;
+        this.startedAt = this.sim.now;
         this.fire("canplay");
         if (this.autoplayOnLoad) this.play()?.catch(() => undefined);
       }
@@ -221,6 +233,8 @@ class FakePlayer implements VideoLike {
       this.duration = 1440;
       this.fire("loadedmetadata");
       this.fire("durationchange");
+      this.startedAt = this.sim.now;
+      this.internalSeeking = true; // the player's own resume point
       this.currentTime = resumeAt;
     });
   }
@@ -696,6 +710,29 @@ async function firstLaunch(kind: Kind): Promise<Result> {
   };
 }
 
+// 3b. Same arrival, with a player that freezes if moved while starting
+async function firstLaunchFragile(kind: Kind): Promise<Result> {
+  const sim = new Sim(4);
+  const server = new FakeServer(sim);
+  const a = readyFriend(sim, server, kind, "A", { latencyMs: 50 });
+  await sim.runUntil(2000);
+  a.client.connect();
+  await sim.runUntil(3000);
+  a.player.pressSpace(); // A already watching
+  await sim.runUntil(25000);
+  const b = makeFriend(sim, server, kind, "B", { latencyMs: 90, bufferMs: 2000, clickDelayMs: 2000 });
+  b.player.quirks = { freezeIfMovedDuringStartup: true, pauseWhileLoadingSeek: true, resumeDelayMs: 300 };
+  b.player.activated = true;
+  b.player.load(2500, 134, true); // B had watched up to 2:14 before
+  b.client.connect(a.client.roomId);
+  await sim.runUntil(25000 + 12000);
+  return {
+    "écart 12 s après l'arrivée de B": fmt(spread([a, b])),
+    états: states([a, b]),
+    "position A": fmt(a.player.currentTime),
+  };
+}
+
 // 4. A and B watch since the beginning, C joins 5 minutes in
 async function lateJoin(kind: Kind): Promise<Result> {
   const sim = new Sim(11);
@@ -831,6 +868,7 @@ async function randomSessionUnsafe(kind: Kind, seed: number) {
         bufferMs: rnd(300, 6000),
         clickDelayMs: rnd(1000, 6000),
       });
+      late.player.quirks = { freezeIfMovedDuringStartup: sim.random() < 0.5 };
       late.player.load(rnd(500, 4000), Math.floor(rnd(0, 900)), sim.random() < 0.5);
       late.client.connect(friends[0].client.roomId);
       friends.push(late);
@@ -924,6 +962,7 @@ async function main() {
     ],
     ["Les deux cliquent sur « Passer l'intro »", bothSkip],
     ["Premier lancement (B arrive par le lien)", firstLaunch],
+    ["B arrive pendant la lecture, lecteur fragile au démarrage", firstLaunchFragile],
     ["C rejoint après 5 min de visionnage", lateJoin],
     ["Coupure réseau de B pendant la lecture", reconnect],
     ["Pause et saut presque simultanés", crossedActions],

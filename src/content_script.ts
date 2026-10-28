@@ -65,11 +65,28 @@ function watchForPlayer(): void {
     log("Player found", video.id);
     g_video = video;
     sync.attach(video);
+    probePlayer(video);
     // Only the frame that actually holds the player talks to the background
     // script, otherwise other Crunchyroll frames could steal the connection.
     connectPort();
   }
   setTimeout(watchForPlayer, PLAYER_POLL_MS);
+}
+
+// Debug builds only: describe Crunchyroll's player controls, to be able to drive
+// them directly in a future version (logs nothing in normal builds)
+function probePlayer(video: HTMLVideoElement): void {
+  setTimeout(() => {
+    const controls = Array.from(document.querySelectorAll("[data-testid], button[aria-label], [role=slider]"))
+      .slice(0, 80)
+      .map((el) => {
+        const testId = el.getAttribute("data-testid");
+        const label = el.getAttribute("aria-label");
+        return `${el.tagName.toLowerCase()}${testId ? `[data-testid=${testId}]` : ""}${label ? ` "${label}"` : ""}`;
+      });
+    log("[probe] player controls", controls.join(" | "));
+    log("[probe] video", { id: video.id, src: video.currentSrc.slice(0, 40), parent: video.parentElement?.className });
+  }, 5000);
 }
 
 // ------------------------------------------------------------------ background script
