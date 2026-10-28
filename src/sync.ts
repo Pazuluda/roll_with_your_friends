@@ -53,7 +53,10 @@ export const SYNC = {
   // When the room pauses, we align precisely when further away than this (seconds)
   PAUSE_SNAP: 0.3,
   // Background correction when someone falls behind during playback (seconds)
-  DRIFT_TOLERANCE: 0.6,
+  DRIFT_TOLERANCE: 0.8,
+  // Each correction is a small jump (Crunchyroll even pauses for it): if two
+  // did not fix the gap, stop until the room changes instead of looping
+  DRIFT_MAX_FIXES: 2,
   DRIFT_CHECK_MS: 2000,
   // No drift correction right after any sync activity, the player needs time to settle
   DRIFT_GRACE_MS: 5000,
@@ -70,6 +73,13 @@ export const SYNC = {
   STALL_MS: 3000,
   STALL_RETRY_MS: 3000,
   STALL_CHECK_MS: 1000,
+  STALL_MAX_ATTEMPTS: 3,
+  // A gap bigger than this is not drift: it is a jump that was not announced
+  // (or a player that went somewhere by itself). It is told to the room
+  // instead of being silently undone.
+  DRIFT_MAX: 8,
+  // No drift correction this soon after the viewer touched the player
+  LOCAL_EVENT_GRACE_MS: 4000,
   // Right after joining, changes made by the player itself (resume position,
   // autoplay) are corrected instead of being broadcast
   ENFORCE_MS: 5000,
@@ -117,6 +127,7 @@ export class SyncController {
   private autoplayBlocked = false;
   private lastActivityAt = -Infinity;
   private lastDriftFixAt = -Infinity;
+  private driftFixes = 0;
   private lastSent?: RoomPicture;
   private lastRemoteAt = -Infinity;
   private seekStartedAt?: number;
@@ -128,6 +139,11 @@ export class SyncController {
   private lastUnstickAt = -Infinity;
   private unstickAttempts = 0;
   private stallTimer?: unknown;
+  private ownSeek?: { target: number; at: number };
+  private seekByViewer = false;
+  private viewerJumpAnnounced = false;
+  private lastLocalEventAt = -Infinity;
+  private ignoreLocalUntil = -Infinity;
   private debounceTimer?: unknown;
   private driftTimer?: unknown;
 
@@ -145,16 +161,24 @@ export class SyncController {
       this.listeners.push([type, fn]);
     };
     on("play", () => {
+      this.lastLocalEventAt = this.clock.now();
       this.pauseDuringSeek = false;
       this.onLocalChange("play");
     });
     on("pause", () => {
+      this.lastLocalEventAt = this.clock.now();
       this.pauseDuringSeek = this.seekInProgress();
       this.onLocalChange("pause");
     });
     on("seeking", () => {
+      const now = this.clock.now();
+      this.lastLocalEventAt = now;
+      // Was this jump made by us (for the room) or by the viewer?
+      const own = this.ownSeek;
+      this.seekByViewer = !(own && now - own.at < 2000 && Math.abs(video.currentTime - own.target) < 1);
+      this.viewerJumpAnnounced = false;
       this.seekBusy = true;
-      this.seekStartedAt = this.seekStartedAt ?? this.clock.now();
+      this.seekStartedAt = this.seekStartedAt ?? now;
       this.onLocalChange("seeking");
     });
     on("seeked", () => {
@@ -251,7 +275,7 @@ export class SyncController {
     this.applyRoom();
     if (crossed) {
       this.log("Messages crossed, confirming the room state");
-      this.scheduleReassert(SYNC.CONFIRM_MS);
+      this.scheduleReassert(SYNC.CONFIRM_MS, true);
     }
   }
 
@@ -327,22 +351,24 @@ export class SyncController {
     if (now - this.stallSince < SYNC.STALL_MS) return;
     if (now - this.lastUnstickAt < SYNC.STALL_RETRY_MS) return;
 
+    if (this.unstickAttempts >= SYNC.STALL_MAX_ATTEMPTS) return;
     this.lastUnstickAt = now;
     this.unstickAttempts++;
-    // Whatever the player does now belongs to the player: nothing is broadcast
+    // What the player does now is our doing: nothing is sent to the room
+    this.ignoreLocalUntil = now + SYNC.SEEK_SETTLE_MS;
+    // the pause below is the player's business: if it stays paused, restart it
     this.seekSettleUntil = now + SYNC.SEEK_SETTLE_MS;
-    if (this.unstickAttempts % 2 === 1) {
-      this.log("Player frozen, pause/play to unblock it", { at: v.currentTime });
-      v.pause();
-      this.tryPlay();
-    } else {
-      this.log("Player frozen, jumping again to unblock it", { at: v.currentTime });
-      v.currentTime = Math.max(0, this.expected());
-    }
+    this.seekByViewer = false;
+    this.log("Player frozen, pause/play to unblock it", { at: v.currentTime });
+    v.pause();
+    this.clock.setTimeout(() => {
+      if (this.inRoom && this.video === v && v.paused) this.tryPlay();
+    }, 300);
   }
 
   private setRoom(state: States, progress: number): void {
     this.room = { state, progress, at: this.clock.now() };
+    this.driftFixes = 0;
     this.lastActivityAt = this.clock.now();
   }
 
@@ -409,14 +435,20 @@ export class SyncController {
     this.lastSent = { ...this.room! };
   }
 
-  private scheduleReassert([min, max]: [number, number]): void {
+  // followRoom: repeat the room state we follow (not where our player happens
+  // to be, which may still be loading)
+  private scheduleReassert([min, max]: [number, number], followRoom = false): void {
     const seq = this.remoteSeq;
     const random = this.clock.random ? this.clock.random() : Math.random();
     this.clock.setTimeout(() => {
       // Someone else already told the room, nothing to do
       if (this.remoteSeq !== seq) return;
       if (!this.canBroadcast()) return;
-      this.broadcast();
+      if (followRoom && this.room) {
+        this.broadcast({ state: this.room.state, progress: this.expected() });
+      } else {
+        this.broadcast();
+      }
     }, min + random * (max - min));
   }
 
@@ -459,6 +491,11 @@ export class SyncController {
     if (!this.inRoom || !v || !this.room) return;
     if (!this.playerReady() || this.awaitingInitialSync || this.autoplayBlocked) return;
 
+    if (this.clock.now() < this.ignoreLocalUntil) {
+      // our own unblocking pause/play: look again once it is over
+      this.recheckLater();
+      return;
+    }
     const snap = this.snapshot();
     if (!this.diverges(snap, SYNC.LOCAL_TOLERANCE)) return; // matches the room: our own change or an echo
 
@@ -470,6 +507,16 @@ export class SyncController {
     }
 
     if (snap.state === States.PAUSED && this.room.state === States.PLAYING && this.pauseDuringSeek) {
+      if (
+        this.seekByViewer &&
+        !this.viewerJumpAnnounced &&
+        Math.abs(snap.progress - this.expected()) > SYNC.LOCAL_TOLERANCE
+      ) {
+        this.viewerJumpAnnounced = true;
+        // The viewer jumped (e.g. "Skip intro") and the player paused itself to
+        // load: tell the room about the jump, the room keeps playing
+        this.broadcast({ state: States.PLAYING, progress: snap.progress });
+      }
       if (this.seekInProgress()) {
         // The player paused itself to load a jump: wait for it to finish
         this.recheckLater();
@@ -540,11 +587,16 @@ export class SyncController {
     if (this.room.state === States.PAUSED) {
       this.setAutoplayBlocked(false);
       if (!v.paused) v.pause();
-      if (Math.abs(v.currentTime - target) > SYNC.PAUSE_SNAP) v.currentTime = target;
+      if (Math.abs(v.currentTime - target) > SYNC.PAUSE_SNAP) this.seekTo(target);
     } else {
-      if (Math.abs(v.currentTime - target) > SYNC.REMOTE_TOLERANCE) v.currentTime = target;
+      if (Math.abs(v.currentTime - target) > SYNC.REMOTE_TOLERANCE) this.seekTo(target);
       if (v.paused) this.tryPlay();
     }
+  }
+
+  private seekTo(target: number): void {
+    this.ownSeek = { target, at: this.clock.now() };
+    this.video!.currentTime = target;
   }
 
   private tryPlay(): void {
@@ -596,15 +648,30 @@ export class SyncController {
     if (v.readyState < HAVE_FUTURE_DATA) return;
 
     const now = this.clock.now();
+    if (this.debounceTimer !== undefined) return; // a local change is being evaluated
     if (now - this.lastActivityAt < SYNC.DRIFT_GRACE_MS) return;
     if (now - this.lastDriftFixAt < SYNC.DRIFT_GRACE_MS) return;
+    if (now - this.lastLocalEventAt < SYNC.LOCAL_EVENT_GRACE_MS) return;
+    if (now < this.ignoreLocalUntil) return;
 
     const target = this.expected();
-    if (Math.abs(v.currentTime - target) <= SYNC.DRIFT_TOLERANCE) return;
+    const gap = Math.abs(v.currentTime - target);
+    if (gap <= SYNC.DRIFT_TOLERANCE) return;
 
+    if (gap > SYNC.DRIFT_MAX) {
+      // Not drift: the player is somewhere else on purpose (a jump we missed)
+      if (this.canBroadcast() && now >= this.enforceUntil) {
+        this.log("Unannounced jump, telling the room", { at: v.currentTime, room: target });
+        this.broadcast();
+      }
+      return;
+    }
+
+    if (this.driftFixes >= SYNC.DRIFT_MAX_FIXES) return;
+    this.driftFixes++;
     this.log("Drift correction", { from: v.currentTime, to: target });
     this.lastDriftFixAt = now;
-    v.currentTime = target;
+    this.seekTo(target);
   }
 
   private log(...args: unknown[]): void {

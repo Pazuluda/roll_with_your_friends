@@ -109,6 +109,8 @@ interface Quirks {
   // after a far jump made from outside its controls, the player stays frozen:
   // "playing" but the image does not move, until pause/play or a new jump
   freezeAfterExternalSeek?: boolean;
+  // how long after the jump the self-paused player starts again (ms)
+  resumeDelayMs?: number;
 }
 
 class FakePlayer implements VideoLike {
@@ -190,10 +192,16 @@ class FakePlayer implements VideoLike {
       this.posAt = this.sim.now;
       this.fire("timeupdate");
       this.fire("seeked");
-      if (resumeAfterLoad && this.paused) {
-        this.paused = false;
-        this.fire("play");
-        this.fire("playing");
+      if (resumeAfterLoad) {
+        this.sim.after(this.quirks.resumeDelayMs ?? 0, () => {
+          if (!this.paused) return;
+          this.freeze();
+          this.paused = false;
+          this.frozen = false;
+          this.posAt = this.sim.now;
+          this.fire("play");
+          this.fire("playing");
+        });
       }
       if (this.firstCanPlay) {
         this.firstCanPlay = false;
@@ -796,6 +804,7 @@ async function randomSessionUnsafe(kind: Kind, seed: number) {
       timeupdateOnSeekStart: sim.random() < 0.5,
       pauseWhileLoadingSeek: sim.random() < 0.3,
       freezeAfterExternalSeek: sim.random() < 0.3,
+      resumeDelayMs: sim.random() < 0.5 ? 0 : rnd(100, 3000),
     };
     friends.push(friend);
   }
@@ -873,6 +882,7 @@ async function fuzz(runs: number) {
       if (r.lateBroadcasts > 0) noisy++;
       if (r.gap <= 1.5 && r.sameState) ok++;
       else failed.push(seed);
+      if (kind === "new" && (r.gap > 3 || !r.sameState)) console.log(`  séance ${seed} : écart ${fmt(r.gap)}, mêmes états: ${r.sameState}`);
     }
     console.log(
       `  ${kind === "old" ? "avant" : "après"}: ${ok}/${runs} séances synchronisées à la fin` +
@@ -899,6 +909,10 @@ async function main() {
     [
       "Skip, lecteur qui se met en pause pendant le chargement",
       (k) => skipIntro(k, 2500, 1200, { pauseWhileLoadingSeek: true }),
+    ],
+    [
+      "Skip, lecteur qui se met en pause et repart 2,5 s après",
+      (k) => skipIntro(k, 1200, 2000, { pauseWhileLoadingSeek: true, resumeDelayMs: 2500 }),
     ],
     [
       "Skip, le lecteur du pote reste figé après le saut",
