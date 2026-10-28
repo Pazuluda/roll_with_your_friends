@@ -78,6 +78,8 @@ export const SYNC = {
   RATE_GAIN: 0.25,
   RATE_MIN: 0.7,
   RATE_MAX: 1.5,
+  // Ahead of the room by more than this: wait (short pause) instead of slowing down
+  HOLD_AHEAD: 1.5,
   DRIFT_CHECK_MS: 2000,
   // No drift correction right after any sync activity, the player needs time to settle
   DRIFT_GRACE_MS: 5000,
@@ -417,6 +419,18 @@ export class SyncController {
       return;
     }
     const behind = this.expected() - v!.currentTime;
+    if (-behind > SYNC.HOLD_AHEAD && -behind <= SYNC.RATE_MAX_GAP) {
+      // Ahead: wait for the others with a short pause, without telling the room
+      const waitMs = -behind * 1000;
+      this.setRate(1);
+      this.log("Ahead of the room, waiting", { seconds: Math.round(-behind * 10) / 10 });
+      this.ignoreLocalUntil = now + waitMs + 1500;
+      this.pauseVideo();
+      this.clock.setTimeout(() => {
+        if (this.inRoom && this.video === v && v!.paused && this.room?.state === States.PLAYING) this.tryPlay();
+      }, waitMs);
+      return;
+    }
     if (Math.abs(behind) < SYNC.RATE_DEADBAND || Math.abs(behind) > SYNC.RATE_MAX_GAP) {
       this.setRate(1);
       return;
@@ -719,7 +733,8 @@ export class SyncController {
     const now = this.clock.now();
     const handled = this.driver ? this.driver.seek(target) : false;
     if (handled !== false) {
-      this.ownSeek = { target, until: now + handled + 2000, approximate: true };
+      // approximate jumps take a while to settle: our own for longer
+      this.ownSeek = { target, until: now + handled + 5000, approximate: true };
       return;
     }
     this.ownSeek = { target, until: now + 2000, approximate: false };

@@ -14,7 +14,7 @@
     "package:chrome": "cd build/ && bestzip ../rolltogether-chrome.zip *",
     "package:firefox": "cd build-firefox/ && bestzip ../rolltogether-firefox.zip *",
     "package": "npm run package:chrome && npm run package:firefox",
-    "test:sync": "npx --yes tsx test/sync.sim.ts"
+    "test:sync": "npx --yes tsx test/sync.sim.ts && npx --yes tsx test/driver.test.ts"
   },
   "private": true,
   "devDependencies": {
