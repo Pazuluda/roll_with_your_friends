@@ -28,6 +28,7 @@ const GAP_MAX = Number(process.env.SIM_GAP_MAX ?? 15000);
 // ------------------------------------------------------------------ event loop
 
 type Task = { t: number; seq: number; fn: () => void };
+export type { Task };
 
 class Sim {
   now = 0;
@@ -491,26 +492,40 @@ class NewClient extends Client {
       }
     );
     // quirks are set after creation: decide at call time
+    let clickTask: Task | undefined;
     this.ctrl.setDriver({
       seek: (t) => {
-        if (!player.quirks.bitmovin || !player.quirks.driverFindsPlayer) return false;
-        player.playerSeek(t);
-        return true;
+        if (!player.quirks.bitmovin) return false;
+        if (player.quirks.driverFindsPlayer) {
+          player.playerSeek(t);
+          return 0;
+        }
+        // Crunchyroll's 10 s buttons, clicked every 60 ms
+        if (clickTask) sim.cancel(clickTask);
+        const delta = t - player.currentTime;
+        const clicks = Math.min(150, Math.round(Math.abs(delta) / 10));
+        let done = 0;
+        const click = () => {
+          clickTask = undefined;
+          player.playerSeek(Math.max(0, player.currentTime + (delta > 0 ? 10 : -10)));
+          if (++done < clicks) clickTask = sim.after(60, click);
+        };
+        if (clicks > 0) click();
+        return clicks * 60;
       },
       play: () => {
         if (!player.quirks.bitmovin || !player.quirks.driverFindsPlayer) return false;
         if (player.paused) player.play(true).catch(() => undefined);
         return true;
       },
-      clickPlay: () => {
-        if (!player.quirks.bitmovin) return false;
-        // a click on Crunchyroll's play button (only works once the page was clicked)
-        if (player.paused && player.activated) player.play(true).catch(() => undefined);
+      pause: () => {
+        if (!player.quirks.bitmovin || !player.quirks.driverFindsPlayer) return false;
+        if (!player.paused) player.pause();
         return true;
       },
-      pause: () => {
-        if (!player.quirks.bitmovin) return false;
-        if (!player.paused) player.pause();
+      clickPlay: () => {
+        if (!player.quirks.bitmovin || !player.paused || !player.activated) return false;
+        player.play(true).catch(() => undefined);
         return true;
       },
     });

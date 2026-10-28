@@ -44,7 +44,9 @@ export interface RemoteState {
 // <video> element directly bypasses it: it then stops loading and freezes.
 // Each method returns false when it could not act (we then use the <video>).
 export interface PlayerDriver {
-  seek(time: number): boolean;
+  // false: not handled. A number: handled, and how long the driver needs (ms);
+  // the position may then only be approximate (e.g. jumps of 10 s)
+  seek(time: number): number | false;
   play(): boolean;
   pause(): boolean;
   // click the site's own play button (to restart a frozen player)
@@ -164,7 +166,7 @@ export class SyncController {
   private lastUnstickAt = -Infinity;
   private unstickAttempts = 0;
   private stallTimer?: unknown;
-  private ownSeek?: { target: number; at: number };
+  private ownSeek?: { target: number; until: number; approximate: boolean };
   private seekByViewer = false;
   private viewerJumpAnnounced = false;
   private lastViewerSeekAt = -Infinity;
@@ -211,7 +213,11 @@ export class SyncController {
       this.lastLocalEventAt = now;
       // Was this jump made by us (for the room) or by the viewer?
       const own = this.ownSeek;
-      this.seekByViewer = !(own && now - own.at < 2000 && Math.abs(video.currentTime - own.target) < 1);
+      this.seekByViewer = !(
+        own &&
+        now < own.until &&
+        (own.approximate || Math.abs(video.currentTime - own.target) < 1)
+      );
       if (this.seekByViewer) this.lastViewerSeekAt = now;
       // Crunchyroll pauses right before jumping: that pause belongs to the jump
       if (video.paused && now - this.lastPauseEventAt < 600) this.pauseDuringSeek = true;
@@ -681,14 +687,9 @@ export class SyncController {
     if (this.expected() - v.currentTime <= SYNC.LOCAL_TOLERANCE) return;
     if (v.readyState < HAVE_FUTURE_DATA) return;
 
-    if (this.clock.now() < this.enforceUntil) {
-      // We just arrived: catch up with the others rather than making them wait
-      this.applyRoom();
-    } else {
-      // The room waits for us: friends that are ahead step back a little
-      this.log("Behind after loading, telling the room");
-      this.broadcast();
-    }
+    // Behind after loading: catch up (speed adjustment, or a jump if far)
+    // rather than making everybody step back, which made them reload too
+    this.applyRoom();
   }
 
   private applyRoom(): void {
@@ -715,8 +716,13 @@ export class SyncController {
   }
 
   private seekTo(target: number): void {
-    this.ownSeek = { target, at: this.clock.now() };
-    if (this.driver?.seek(target)) return;
+    const now = this.clock.now();
+    const handled = this.driver ? this.driver.seek(target) : false;
+    if (handled !== false) {
+      this.ownSeek = { target, until: now + handled + 2000, approximate: true };
+      return;
+    }
+    this.ownSeek = { target, until: now + 2000, approximate: false };
     this.video!.currentTime = target;
   }
 
