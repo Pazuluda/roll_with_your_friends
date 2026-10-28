@@ -59,6 +59,11 @@ export const SYNC = {
   DRIFT_GRACE_MS: 5000,
   // Groups bursts of player events (seek + play, scrubbing...) into one decision
   DEBOUNCE_MS: 200,
+  // Crunchyroll's player pauses itself while it loads a jump made from outside
+  // (by us, for the room) and resumes afterwards. A pause that starts during a
+  // jump, or this soon after it, belongs to the player, not to the viewer.
+  SEEK_SETTLE_MS: 1500,
+  RECHECK_MS: 400,
   // Right after joining, changes made by the player itself (resume position,
   // autoplay) are corrected instead of being broadcast
   ENFORCE_MS: 5000,
@@ -109,6 +114,9 @@ export class SyncController {
   private lastSent?: RoomPicture;
   private lastRemoteAt = -Infinity;
   private seekStartedAt?: number;
+  private seekBusy = false;
+  private seekSettleUntil = -Infinity;
+  private pauseDuringSeek = false;
   private debounceTimer?: unknown;
   private driftTimer?: unknown;
 
@@ -125,13 +133,24 @@ export class SyncController {
       video.addEventListener(type, fn);
       this.listeners.push([type, fn]);
     };
-    on("play", () => this.onLocalChange("play"));
-    on("pause", () => this.onLocalChange("pause"));
+    on("play", () => {
+      this.pauseDuringSeek = false;
+      this.onLocalChange("play");
+    });
+    on("pause", () => {
+      this.pauseDuringSeek = this.seekInProgress();
+      this.onLocalChange("pause");
+    });
     on("seeking", () => {
+      this.seekBusy = true;
       this.seekStartedAt = this.seekStartedAt ?? this.clock.now();
       this.onLocalChange("seeking");
     });
-    on("seeked", () => this.onPlaybackResumed());
+    on("seeked", () => {
+      this.seekBusy = false;
+      this.seekSettleUntil = this.clock.now() + SYNC.SEEK_SETTLE_MS;
+      this.onPlaybackResumed();
+    });
     on("playing", () => this.onPlaybackResumed());
     for (const type of ["loadedmetadata", "canplay", "durationchange"]) {
       on(type, () => this.onPlayerMaybeReady());
@@ -235,6 +254,8 @@ export class SyncController {
     this.awaitingInitialSync = false;
     this.reassertWhenReady = false;
     this.seekStartedAt = undefined;
+    this.seekBusy = false;
+    this.pauseDuringSeek = false;
     this.enforceUntil = -Infinity;
     this.setAutoplayBlocked(false);
     if (this.debounceTimer !== undefined) this.clock.clearTimeout(this.debounceTimer);
@@ -387,7 +408,33 @@ export class SyncController {
       return;
     }
 
+    if (snap.state === States.PAUSED && this.room.state === States.PLAYING && this.pauseDuringSeek) {
+      if (this.seekInProgress()) {
+        // The player paused itself to load a jump: wait for it to finish
+        this.recheckLater();
+        return;
+      }
+      // The jump is loaded but the player stayed paused: start it again
+      this.pauseDuringSeek = false;
+      this.log("Player paused itself during a jump, resuming");
+      this.applyRoom();
+      return;
+    }
+
     this.broadcast(snap);
+  }
+
+  private seekInProgress(): boolean {
+    const v = this.video;
+    return this.seekBusy || !!v?.seeking || this.clock.now() < this.seekSettleUntil;
+  }
+
+  private recheckLater(): void {
+    if (this.debounceTimer !== undefined) this.clock.clearTimeout(this.debounceTimer);
+    this.debounceTimer = this.clock.setTimeout(() => {
+      this.debounceTimer = undefined;
+      this.evaluateLocalChange();
+    }, SYNC.RECHECK_MS);
   }
 
   // A jump (ours, or one we applied for the room) finished loading.
@@ -396,7 +443,8 @@ export class SyncController {
     const v = this.video;
     if (this.seekStartedAt === undefined || !v) return;
     if (v.paused) {
-      this.seekStartedAt = undefined;
+      // A player that paused itself for the jump will resume: wait for "playing"
+      if (!this.pauseDuringSeek) this.seekStartedAt = undefined;
       return;
     }
     if (v.seeking || v.readyState < HAVE_FUTURE_DATA) return; // still loading, wait for "playing"

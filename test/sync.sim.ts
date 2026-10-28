@@ -103,7 +103,8 @@ const FORWARD_BUFFER_S = 30;
 interface Quirks {
   // Firefox fires "timeupdate" as soon as a seek starts
   timeupdateOnSeekStart?: boolean;
-  // the player pauses itself while a far jump loads, then resumes
+  // the player pauses itself while a jump loads, then resumes (seen on
+  // Crunchyroll when the jump comes from outside its own controls)
   pauseWhileLoadingSeek?: boolean;
 }
 
@@ -156,16 +157,15 @@ class FakePlayer implements VideoLike {
     if (this.quirks.timeupdateOnSeekStart) this.fire("timeupdate");
     const isBuffered = this.isBuffered(target);
     let resumeAfterLoad = false;
+    if (!this.paused && this.quirks.pauseWhileLoadingSeek) {
+      this.paused = true;
+      this.fire("pause");
+      resumeAfterLoad = true;
+    }
     if (!isBuffered) {
       this.readyState = 1;
       this.stalled = true;
-      if (!this.paused && this.quirks.pauseWhileLoadingSeek) {
-        this.paused = true;
-        this.fire("pause");
-        resumeAfterLoad = true;
-      } else if (!this.paused) {
-        this.fire("waiting");
-      }
+      if (!this.paused) this.fire("waiting");
     }
     if (this.seekTask) this.sim.cancel(this.seekTask);
     this.seekTask = this.sim.after(isBuffered ? 30 : this.bufferDelayMs, () => {
@@ -357,6 +357,7 @@ abstract class Client implements Conn {
   roomId?: string;
   overlayShownAt?: number;
   broadcasts = 0;
+  pausesSent = 0;
 
   constructor(
     protected sim: Sim,
@@ -386,6 +387,7 @@ abstract class Client implements Conn {
 
   protected send(state: States, progress: number): void {
     this.broadcasts++;
+    if (state === States.PAUSED) this.pausesSent++;
     const roomId = this.roomId;
     if (!roomId) return;
     this.sim.after(this.latencyMs, () => this.server.update(this, roomId, state, progress));
@@ -605,6 +607,7 @@ async function skipIntro(kind: Kind, bufferA: number, bufferB: number, quirks: Q
   a.player.pressSpace(); // start the episode together
   await sim.runUntil(60000);
   const seeksBefore = a.player.seekCount + b.player.seekCount;
+  const pausesBefore = a.client.pausesSent + b.client.pausesSent;
   const t0 = sim.now;
   const introEnd = a.player.currentTime + 85;
   a.player.userSeek(introEnd); // "Skip intro" jumps to the end of the opening
@@ -614,6 +617,7 @@ async function skipIntro(kind: Kind, bufferA: number, bufferB: number, quirks: Q
     "écart max (6 à 30 s après le skip)": fmt(worst),
     "écart final": fmt(spread([a, b])),
     "sauts de lecture": seeks,
+    "pauses envoyées par erreur": a.client.pausesSent + b.client.pausesSent - pausesBefore,
     états: states([a, b]),
   };
 }
@@ -904,7 +908,8 @@ async function main() {
     const finalKey = keys.find((k) => k.startsWith("écart"))!;
     const finalGap = parseFloat(String(neu[keys.filter((k) => k.startsWith("écart")).pop()!]));
     const allPlaying = !String(neu["états"]).includes("pause") || title.includes("Pause");
-    if (!(finalGap <= 2.5) || !allPlaying) {
+    const spuriousPauses = Number(neu["pauses envoyées par erreur"] ?? 0);
+    if (!(finalGap <= 2.5) || !allPlaying || spuriousPauses > 0) {
       failures++;
       console.log(`  !! nouvelle version pas synchronisée (${finalKey})`);
     }
