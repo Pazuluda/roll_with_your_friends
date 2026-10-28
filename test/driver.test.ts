@@ -74,5 +74,30 @@ failures += run("hook useRef", (player) =>
     { type: function av() {}, memoizedProps: {}, memoizedState: { memoizedState: 1, next: { memoizedState: { current: player }, next: null } } },
   )) ? 0 : 1;
 
-console.log(failures ? `${failures} échec(s)` : "Le lecteur est trouvé dans les 3 formes testées.");
+// 4. the real shape seen on crunchyroll.com: Crunchyroll's wrapper
+//    (volumeVM._player) must be preferred over the raw Bitmovin player inside it
+{
+  class CrPlayer {
+    seeks: number[] = [];
+    playerOrchestrator: any;
+    constructor(raw: BitmovinPlayer) { this.playerOrchestrator = { _mediaEngine: { _player: raw } }; }
+    load() {} play() {} pause() {} setPlaybackRate() {}
+    seek(t: number) { this.seeks.push(t); }
+  }
+  const raw = new BitmovinPlayer();
+  const wrapper = new CrPlayer(raw);
+  const ctxValue = { viewModelContainer: { volumeVM: { _player: wrapper } } };
+  const fiber = chain(
+    { type: "button", memoizedProps: {} },
+    { type: function iK() {}, memoizedProps: {}, dependencies: { firstContext: { memoizedValue: ctxValue, next: null } } },
+  );
+  (globalThis as any).document = { querySelector: (sel: string) => (sel.includes("play-pause") ? fakeElement(fiber) : null) };
+  const driver = new CrunchyrollDriver({ currentTime: 100, paused: false } as any, () => undefined);
+  driver.seek(300);
+  const ok = wrapper.seeks[0] === 300 && raw.seeks.length === 0;
+  console.log(`${ok ? "OK  " : "FAIL"} lecteur Crunchyroll préféré au Bitmovin brut (forme réelle)`);
+  if (!ok) failures++;
+}
+
+console.log(failures ? `${failures} échec(s)` : "Le lecteur est trouvé dans toutes les formes testées.");
 process.exit(failures ? 1 : 0);

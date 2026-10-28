@@ -111,6 +111,7 @@ export class CrunchyrollDriver implements PlayerDriver {
   // candidates whose seek did not move the video: never used again
   private rejected = new Set<Any>();
   private verified = false;
+  private seekCount = 0;
 
   constructor(private video: HTMLVideoElement, private log: Log) {}
 
@@ -118,6 +119,7 @@ export class CrunchyrollDriver implements PlayerDriver {
     const player = this.getPlayer();
     if (player) {
       try {
+        this.seekCount++;
         if (isFunction(player.object, "seek")) player.object.seek(time);
         else player.object.seekTo(time);
         if (!this.verified) this.verify(player, time);
@@ -130,28 +132,15 @@ export class CrunchyrollDriver implements PlayerDriver {
     return this.seekWithButtons(time);
   }
 
+  // Play and pause go through the <video>: it works, and when Firefox blocks
+  // autoplay the <video> says so (the join button can then be shown), while
+  // the player object refuses silently.
   play(): boolean {
-    const player = this.getPlayer();
-    if (!player) return false; // the <video> is fine for this
-    try {
-      player.object.play()?.catch?.(() => undefined);
-      return true;
-    } catch {
-      this.player = undefined;
-      return false;
-    }
+    return false;
   }
 
   pause(): boolean {
-    const player = this.getPlayer();
-    if (!player) return false;
-    try {
-      player.object.pause();
-      return true;
-    } catch {
-      this.player = undefined;
-      return false;
-    }
+    return false;
   }
 
   // Restart a stuck player the way a viewer would. Only when Crunchyroll's
@@ -167,8 +156,10 @@ export class CrunchyrollDriver implements PlayerDriver {
   // otherwise it was the wrong object
   private verify(player: Candidate, target: number): void {
     const startedAt = this.video.currentTime;
+    const seekNumber = this.seekCount;
     setTimeout(() => {
       if (this.player !== player) return;
+      if (this.seekCount !== seekNumber) return; // another jump since: judge that one
       const now = this.video.currentTime;
       const moved = Math.abs(now - target) < 4 || Math.abs(target - startedAt) < 4;
       if (moved) {
@@ -314,6 +305,7 @@ export class CrunchyrollDriver implements PlayerDriver {
     const seen = new Set<Any>();
     const queue: Array<{ value: Any; path: string; depth: number }> = roots.map((r) => ({ ...r, depth: 0 }));
     const viewModels: Candidate[] = [];
+    let bitmovin: Candidate | undefined = undefined;
     let visited = 0;
 
     while (queue.length && visited < SEARCH_MAX_NODES) {
@@ -324,7 +316,7 @@ export class CrunchyrollDriver implements PlayerDriver {
       visited++;
 
       const kind = this.rejected.has(value) ? undefined : classify(value);
-      if (kind === "bitmovin") return { object: value, kind, path };
+      if (kind === "bitmovin" && !bitmovin) bitmovin = { object: value, kind, path };
       if (kind === "viewmodel") viewModels.push({ object: value, kind, path });
 
       if (depth >= SEARCH_MAX_DEPTH || value === win) continue;
@@ -362,8 +354,12 @@ export class CrunchyrollDriver implements PlayerDriver {
       }
     }
 
+    // Crunchyroll's own player object (it wraps Bitmovin and keeps its
+    // interface up to date) comes first; raw Bitmovin is the backup
+    const wrapper = viewModels.find((c) => /\._player$/.test(c.path) && isFunction(c.object, "seek"));
+    if (wrapper) return wrapper;
+    if (bitmovin) return bitmovin;
     if (viewModels.length) {
-      // Prefer the one that talks about time/playback the most
       const score = (c: Candidate) =>
         methodNames(c.object).filter((m) => /time|seek|play|pause|duration|position/i.test(m)).length;
       viewModels.sort((a, b) => score(b) - score(a));

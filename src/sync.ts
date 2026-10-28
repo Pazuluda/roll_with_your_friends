@@ -205,9 +205,12 @@ export class SyncController {
       this.onLocalChange("play");
     });
     on("pause", () => {
-      this.lastPauseEventAt = this.clock.now();
-      this.lastLocalEventAt = this.clock.now();
-      this.pauseDuringSeek = this.seekInProgress();
+      const now = this.clock.now();
+      this.lastPauseEventAt = now;
+      this.lastLocalEventAt = now;
+      // during a jump, or right after we asked the player for one
+      this.pauseDuringSeek = this.seekInProgress() || (!!this.ownSeek && now < this.ownSeek.until);
+      if (this.ownSeek && now < this.ownSeek.until) this.seekByViewer = false;
       this.onLocalChange("pause");
     });
     on("seeking", () => {
