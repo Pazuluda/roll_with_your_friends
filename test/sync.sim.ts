@@ -114,10 +114,17 @@ interface Quirks {
   // Crunchyroll on arrival: a jump made from outside while the player is still
   // starting (loading, going to its resume point) leaves it frozen
   freezeIfMovedDuringStartup?: boolean;
+  // Crunchyroll's Bitmovin player: any jump made on the <video> itself freezes
+  // it, and a play() on the <video> then fails (AbortError). Jumps and
+  // play/pause made through the player (the driver) work.
+  bitmovin?: boolean;
+  // the extension can reach the player object (otherwise only its button)
+  driverFindsPlayer?: boolean;
 }
 
 class FakePlayer implements VideoLike {
   quirks: Quirks = {};
+  private rate = 1;
   paused = true;
   readyState = 0;
   seeking = false;
@@ -153,9 +160,18 @@ class FakePlayer implements VideoLike {
 
   get currentTime(): number {
     if (!this.paused && !this.stalled && !this.seeking) {
-      return Math.min(this.duration || Infinity, this.pos + (this.sim.now - this.posAt) / 1000);
+      return Math.min(this.duration || Infinity, this.pos + (this.rate * (this.sim.now - this.posAt)) / 1000);
     }
     return this.pos;
+  }
+
+  get playbackRate(): number {
+    return this.rate;
+  }
+
+  set playbackRate(rate: number) {
+    this.freeze();
+    this.rate = rate;
   }
 
   set currentTime(target: number) {
@@ -194,7 +210,8 @@ class FakePlayer implements VideoLike {
       this.stalled = false;
       if (
         !fromUser &&
-        ((this.quirks.freezeAfterExternalSeek && !isBuffered) ||
+        (this.quirks.bitmovin ||
+          (this.quirks.freezeAfterExternalSeek && !isBuffered) ||
           (this.quirks.freezeIfMovedDuringStartup && duringStartup))
       ) {
         this.stalled = true;
@@ -239,7 +256,12 @@ class FakePlayer implements VideoLike {
     });
   }
 
-  play(): Promise<void> {
+  play(viaPlayer = false): Promise<void> {
+    if (this.quirks.bitmovin && this.frozen && !viaPlayer) {
+      const error = new Error("aborted") as Error & { name: string };
+      error.name = "AbortError";
+      return Promise.reject(error);
+    }
     if (!this.autoplayAllowed && !this.activated) {
       const error = new Error("play() blocked") as Error & { name: string };
       error.name = "NotAllowedError";
@@ -280,6 +302,12 @@ class FakePlayer implements VideoLike {
     this.activated = true;
     if (this.paused) this.play();
     else this.pause();
+  }
+
+  // jump made through the player itself (Bitmovin API)
+  playerSeek(t: number): void {
+    this.internalSeeking = true;
+    this.currentTime = t;
   }
 
   userSeek(t: number): void {
@@ -462,6 +490,30 @@ class NewClient extends Client {
         },
       }
     );
+    // quirks are set after creation: decide at call time
+    this.ctrl.setDriver({
+      seek: (t) => {
+        if (!player.quirks.bitmovin || !player.quirks.driverFindsPlayer) return false;
+        player.playerSeek(t);
+        return true;
+      },
+      play: () => {
+        if (!player.quirks.bitmovin || !player.quirks.driverFindsPlayer) return false;
+        if (player.paused) player.play(true).catch(() => undefined);
+        return true;
+      },
+      clickPlay: () => {
+        if (!player.quirks.bitmovin) return false;
+        // a click on Crunchyroll's play button (only works once the page was clicked)
+        if (player.paused && player.activated) player.play(true).catch(() => undefined);
+        return true;
+      },
+      pause: () => {
+        if (!player.quirks.bitmovin) return false;
+        if (!player.paused) player.pause();
+        return true;
+      },
+    });
     this.ctrl.attach(player);
   }
 
@@ -843,6 +895,9 @@ async function randomSessionUnsafe(kind: Kind, seed: number) {
       freezeAfterExternalSeek: sim.random() < 0.3,
       resumeDelayMs: sim.random() < 0.5 ? 0 : rnd(100, 3000),
     };
+    if (sim.random() < 0.3) {
+      friend.player.quirks = { bitmovin: true, driverFindsPlayer: sim.random() < 0.6, pauseWhileLoadingSeek: true, resumeDelayMs: rnd(0, 500) };
+    }
     friends.push(friend);
   }
   await sim.runUntil(2000);
@@ -951,6 +1006,14 @@ async function main() {
     [
       "Skip, lecteur qui se met en pause et repart 2,5 s après",
       (k) => skipIntro(k, 1200, 2000, { pauseWhileLoadingSeek: true, resumeDelayMs: 2500 }),
+    ],
+    [
+      "Skip, lecteur Crunchyroll (Bitmovin) piloté par l'extension",
+      (k) => skipIntro(k, 1000, 2000, { bitmovin: true, driverFindsPlayer: true, pauseWhileLoadingSeek: true, resumeDelayMs: 200 }),
+    ],
+    [
+      "Skip, lecteur Crunchyroll, seulement son bouton play/pause",
+      (k) => skipIntro(k, 1000, 2000, { bitmovin: true, pauseWhileLoadingSeek: true, resumeDelayMs: 200 }),
     ],
     [
       "Skip, le lecteur du pote reste figé après le saut",

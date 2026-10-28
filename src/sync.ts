@@ -14,6 +14,7 @@ export interface VideoLike {
   readyState: number;
   seeking: boolean;
   duration: number;
+  playbackRate: number;
   play(): Promise<void> | void;
   pause(): void;
   addEventListener(type: string, listener: () => void): void;
@@ -39,6 +40,17 @@ export interface RemoteState {
   senderId?: string;
 }
 
+// Controls the site's own player (Crunchyroll's Bitmovin player). Moving the
+// <video> element directly bypasses it: it then stops loading and freezes.
+// Each method returns false when it could not act (we then use the <video>).
+export interface PlayerDriver {
+  seek(time: number): boolean;
+  play(): boolean;
+  pause(): boolean;
+  // click the site's own play button (to restart a frozen player)
+  clickPlay?(): boolean;
+}
+
 export interface SyncCallbacks {
   send(state: States, progress: number): void;
   onAutoplayBlocked(blocked: boolean): void;
@@ -57,6 +69,13 @@ export const SYNC = {
   // Each correction is a small jump (Crunchyroll even pauses for it): if two
   // did not fix the gap, stop until the room changes instead of looping
   DRIFT_MAX_FIXES: 2,
+  // Small gaps while playing are closed by playing slightly faster or slower
+  // instead of jumping (a jump makes Crunchyroll's player reload and stall)
+  RATE_MAX_GAP: 5,
+  RATE_DEADBAND: 0.25,
+  RATE_GAIN: 0.25,
+  RATE_MIN: 0.7,
+  RATE_MAX: 1.5,
   DRIFT_CHECK_MS: 2000,
   // No drift correction right after any sync activity, the player needs time to settle
   DRIFT_GRACE_MS: 5000,
@@ -155,7 +174,15 @@ export class SyncController {
   private debounceTimer?: unknown;
   private driftTimer?: unknown;
 
+  private driver?: PlayerDriver;
+  private rateAdjusted = false;
+  private lastPauseEventAt = -Infinity;
+
   constructor(private clock: Clock, private cb: SyncCallbacks) {}
+
+  setDriver(driver: PlayerDriver | undefined): void {
+    this.driver = driver;
+  }
 
   // ---------------------------------------------------------------- player
 
@@ -174,6 +201,7 @@ export class SyncController {
       this.onLocalChange("play");
     });
     on("pause", () => {
+      this.lastPauseEventAt = this.clock.now();
       this.lastLocalEventAt = this.clock.now();
       this.pauseDuringSeek = this.seekInProgress();
       this.onLocalChange("pause");
@@ -185,6 +213,8 @@ export class SyncController {
       const own = this.ownSeek;
       this.seekByViewer = !(own && now - own.at < 2000 && Math.abs(video.currentTime - own.target) < 1);
       if (this.seekByViewer) this.lastViewerSeekAt = now;
+      // Crunchyroll pauses right before jumping: that pause belongs to the jump
+      if (video.paused && now - this.lastPauseEventAt < 600) this.pauseDuringSeek = true;
       this.viewerJumpAnnounced = false;
       this.seekBusy = true;
       this.seekStartedAt = this.seekStartedAt ?? now;
@@ -289,6 +319,7 @@ export class SyncController {
   }
 
   leaveRoom(): void {
+    this.setRate(1);
     this.inRoom = false;
     this.room = undefined;
     this.lastSent = undefined;
@@ -345,7 +376,51 @@ export class SyncController {
     return this.clock.now() - this.stallSince < 2000;
   }
 
+  private setRate(rate: number): void {
+    const v = this.video;
+    if (!v) return;
+    if (rate === 1) {
+      if (!this.rateAdjusted) return;
+      this.rateAdjusted = false;
+    } else {
+      this.rateAdjusted = true;
+    }
+    try {
+      if (Math.abs(v.playbackRate - rate) > 0.01) v.playbackRate = rate;
+    } catch {
+      // ignore
+    }
+  }
+
+  private adjustRate(): void {
+    const v = this.video;
+    const now = this.clock.now();
+    const usable =
+      !!v &&
+      !!this.room &&
+      this.room.state === States.PLAYING &&
+      !v.paused &&
+      !v.seeking &&
+      v.readyState >= HAVE_FUTURE_DATA &&
+      !this.awaitingInitialSync &&
+      !this.autoplayBlocked &&
+      now >= this.ignoreLocalUntil &&
+      !this.seekInProgress();
+    if (!usable) {
+      this.setRate(1);
+      return;
+    }
+    const behind = this.expected() - v!.currentTime;
+    if (Math.abs(behind) < SYNC.RATE_DEADBAND || Math.abs(behind) > SYNC.RATE_MAX_GAP) {
+      this.setRate(1);
+      return;
+    }
+    const rate = Math.min(SYNC.RATE_MAX, Math.max(SYNC.RATE_MIN, 1 + behind * SYNC.RATE_GAIN));
+    this.setRate(Math.round(rate * 100) / 100);
+  }
+
   private checkStall(): void {
+    this.adjustRate();
     const v = this.video;
     const now = this.clock.now();
     const playingRoom = !!this.room && this.room.state === States.PLAYING;
@@ -377,7 +452,7 @@ export class SyncController {
     this.seekByViewer = false;
     if (this.unstickAttempts % 2 === 1) {
       this.log("Player frozen, pause/play to unblock it", { at: v.currentTime });
-      v.pause();
+      this.pauseVideo();
       this.clock.setTimeout(() => {
         if (this.inRoom && this.video === v && v.paused) this.tryPlay();
       }, 300);
@@ -629,20 +704,29 @@ export class SyncController {
 
     if (this.room.state === States.PAUSED) {
       this.setAutoplayBlocked(false);
-      if (!v.paused) v.pause();
+      if (!v.paused) this.pauseVideo();
       if (Math.abs(v.currentTime - target) > SYNC.PAUSE_SNAP) this.seekTo(target);
     } else {
-      if (Math.abs(v.currentTime - target) > SYNC.REMOTE_TOLERANCE) this.seekTo(target);
+      const gap = Math.abs(v.currentTime - target);
+      // small gaps are closed by adjusting the speed (unless we must start playing)
+      if (gap > SYNC.RATE_MAX_GAP || (gap > SYNC.REMOTE_TOLERANCE && v.paused)) this.seekTo(target);
       if (v.paused) this.tryPlay();
     }
   }
 
   private seekTo(target: number): void {
     this.ownSeek = { target, at: this.clock.now() };
+    if (this.driver?.seek(target)) return;
     this.video!.currentTime = target;
   }
 
+  private pauseVideo(): void {
+    if (this.driver?.pause()) return;
+    this.video!.pause();
+  }
+
   private tryPlay(): void {
+    if (this.driver?.play()) return;
     let result: Promise<void> | void;
     try {
       result = this.video!.play();
@@ -664,7 +748,17 @@ export class SyncController {
         this.setAutoplayBlocked(true);
       }
     }
-    // AbortError: play() interrupted by pause() or a new source, nothing to do
+    if (name === "AbortError" && this.driver?.clickPlay) {
+      // The <video> refused to start (Crunchyroll's player is stuck):
+      // press its own play button instead, like a viewer would
+      this.clock.setTimeout(() => {
+        const v = this.video;
+        if (!this.inRoom || !v || !v.paused || this.room?.state !== States.PLAYING) return;
+        this.ignoreLocalUntil = this.clock.now() + SYNC.SEEK_SETTLE_MS;
+        this.log("Pressing the player's play button");
+        this.driver?.clickPlay?.();
+      }, 250);
+    }
   }
 
   private setAutoplayBlocked(blocked: boolean): void {
@@ -699,7 +793,7 @@ export class SyncController {
 
     const target = this.expected();
     const gap = Math.abs(v.currentTime - target);
-    if (gap <= SYNC.DRIFT_TOLERANCE) return;
+    if (gap <= SYNC.RATE_MAX_GAP) return; // handled by the speed adjustment
 
     if (gap > SYNC.DRIFT_MAX && now - this.lastViewerSeekAt < 30000) {
       // The viewer jumped and it was not announced: announce it, if the

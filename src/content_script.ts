@@ -1,5 +1,6 @@
 import { log } from "./common";
 import { SyncController } from "./sync";
+import { CrunchyrollDriver } from "./crunchyroll_driver";
 import { Message, MessageTypes, PortName } from "./types";
 import { extensionAPI } from "./browser-compat";
 
@@ -64,6 +65,7 @@ function watchForPlayer(): void {
   if (video && video !== g_video) {
     log("Player found", video.id);
     g_video = video;
+    sync.setDriver(new CrunchyrollDriver(video, (...args) => log(...args)));
     sync.attach(video);
     probePlayer(video);
     // Only the frame that actually holds the player talks to the background
