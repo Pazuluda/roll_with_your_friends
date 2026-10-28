@@ -106,6 +106,9 @@ interface Quirks {
   // the player pauses itself while a jump loads, then resumes (seen on
   // Crunchyroll when the jump comes from outside its own controls)
   pauseWhileLoadingSeek?: boolean;
+  // after a far jump made from outside its controls, the player stays frozen:
+  // "playing" but the image does not move, until pause/play or a new jump
+  freezeAfterExternalSeek?: boolean;
 }
 
 class FakePlayer implements VideoLike {
@@ -125,6 +128,8 @@ class FakePlayer implements VideoLike {
   private buffered: Array<[number, number]> = [];
   private seekTask?: Task;
   private firstCanPlay = true;
+  private userSeeking = false;
+  frozen = false;
   private autoplayOnLoad = false;
 
   constructor(private sim: Sim, readonly name: string, private bufferDelayMs: number) {
@@ -147,6 +152,9 @@ class FakePlayer implements VideoLike {
   }
 
   set currentTime(target: number) {
+    const fromUser = this.userSeeking;
+    this.userSeeking = false;
+    this.frozen = false;
     this.freeze();
     this.pos = target;
     this.posAt = this.sim.now;
@@ -175,6 +183,10 @@ class FakePlayer implements VideoLike {
       this.readyState = 4;
       const wasStalled = this.stalled;
       this.stalled = false;
+      if (this.quirks.freezeAfterExternalSeek && !fromUser && !isBuffered) {
+        this.stalled = true;
+        this.frozen = true;
+      }
       this.posAt = this.sim.now;
       this.fire("timeupdate");
       this.fire("seeked");
@@ -188,7 +200,7 @@ class FakePlayer implements VideoLike {
         this.fire("canplay");
         if (this.autoplayOnLoad) this.play()?.catch(() => undefined);
       }
-      if (!this.paused && wasStalled) this.fire("playing");
+      if (!this.paused && wasStalled && !this.frozen) this.fire("playing");
     });
   }
 
@@ -214,6 +226,7 @@ class FakePlayer implements VideoLike {
     if (this.paused) {
       this.freeze();
       this.paused = false;
+      this.frozen = false;
       this.posAt = this.sim.now;
       this.fire("play");
       if (this.readyState >= 3 && !this.seeking) {
@@ -249,6 +262,7 @@ class FakePlayer implements VideoLike {
 
   userSeek(t: number): void {
     this.activated = true;
+    this.userSeeking = true;
     this.currentTime = t;
   }
 
@@ -781,6 +795,7 @@ async function randomSessionUnsafe(kind: Kind, seed: number) {
     friend.player.quirks = {
       timeupdateOnSeekStart: sim.random() < 0.5,
       pauseWhileLoadingSeek: sim.random() < 0.3,
+      freezeAfterExternalSeek: sim.random() < 0.3,
     };
     friends.push(friend);
   }
@@ -884,6 +899,10 @@ async function main() {
     [
       "Skip, lecteur qui se met en pause pendant le chargement",
       (k) => skipIntro(k, 2500, 1200, { pauseWhileLoadingSeek: true }),
+    ],
+    [
+      "Skip, le lecteur du pote reste figé après le saut",
+      (k) => skipIntro(k, 1000, 2000, { pauseWhileLoadingSeek: true, freezeAfterExternalSeek: true }),
     ],
     [
       "Skip, les deux comportements + chargements lents",

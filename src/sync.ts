@@ -64,6 +64,12 @@ export const SYNC = {
   // jump, or this soon after it, belongs to the player, not to the viewer.
   SEEK_SETTLE_MS: 1500,
   RECHECK_MS: 400,
+  // Crunchyroll's player sometimes stays frozen after a jump made from outside
+  // its controls: "playing", but the image no longer moves. A pause/play (what
+  // spamming the space bar did) or a new jump to the same place unblocks it.
+  STALL_MS: 3000,
+  STALL_RETRY_MS: 3000,
+  STALL_CHECK_MS: 1000,
   // Right after joining, changes made by the player itself (resume position,
   // autoplay) are corrected instead of being broadcast
   ENFORCE_MS: 5000,
@@ -117,6 +123,11 @@ export class SyncController {
   private seekBusy = false;
   private seekSettleUntil = -Infinity;
   private pauseDuringSeek = false;
+  private stallPosition = -1;
+  private stallSince = -Infinity;
+  private lastUnstickAt = -Infinity;
+  private unstickAttempts = 0;
+  private stallTimer?: unknown;
   private debounceTimer?: unknown;
   private driftTimer?: unknown;
 
@@ -260,8 +271,12 @@ export class SyncController {
     this.setAutoplayBlocked(false);
     if (this.debounceTimer !== undefined) this.clock.clearTimeout(this.debounceTimer);
     if (this.driftTimer !== undefined) this.clock.clearTimeout(this.driftTimer);
+    if (this.stallTimer !== undefined) this.clock.clearTimeout(this.stallTimer);
     this.debounceTimer = undefined;
     this.driftTimer = undefined;
+    this.stallTimer = undefined;
+    this.stallPosition = -1;
+    this.unstickAttempts = 0;
   }
 
   // Called from a click on the "join playback" button (user gesture, so the
@@ -278,6 +293,52 @@ export class SyncController {
     if (this.inRoom) return;
     this.inRoom = true;
     this.scheduleDriftCheck();
+    this.scheduleStallCheck();
+  }
+
+  private scheduleStallCheck(): void {
+    this.stallTimer = this.clock.setTimeout(() => {
+      this.stallTimer = undefined;
+      if (!this.inRoom) return;
+      this.checkStall();
+      this.scheduleStallCheck();
+    }, SYNC.STALL_CHECK_MS);
+  }
+
+  private checkStall(): void {
+    const v = this.video;
+    const now = this.clock.now();
+    const playingRoom = !!this.room && this.room.state === States.PLAYING;
+    if (!v || !playingRoom || v.paused || this.autoplayBlocked || !this.playerReady()) {
+      this.stallPosition = -1;
+      this.unstickAttempts = 0;
+      return;
+    }
+    const duration = v.duration;
+    if (isFinite(duration) && duration > 0 && v.currentTime >= duration - 1) return; // end of episode
+
+    if (Math.abs(v.currentTime - this.stallPosition) > 0.05) {
+      // The video moves: all good
+      this.stallPosition = v.currentTime;
+      this.stallSince = now;
+      this.unstickAttempts = 0;
+      return;
+    }
+    if (now - this.stallSince < SYNC.STALL_MS) return;
+    if (now - this.lastUnstickAt < SYNC.STALL_RETRY_MS) return;
+
+    this.lastUnstickAt = now;
+    this.unstickAttempts++;
+    // Whatever the player does now belongs to the player: nothing is broadcast
+    this.seekSettleUntil = now + SYNC.SEEK_SETTLE_MS;
+    if (this.unstickAttempts % 2 === 1) {
+      this.log("Player frozen, pause/play to unblock it", { at: v.currentTime });
+      v.pause();
+      this.tryPlay();
+    } else {
+      this.log("Player frozen, jumping again to unblock it", { at: v.currentTime });
+      v.currentTime = Math.max(0, this.expected());
+    }
   }
 
   private setRoom(state: States, progress: number): void {
