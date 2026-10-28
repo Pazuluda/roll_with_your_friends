@@ -159,7 +159,9 @@ function handleServiceWorkerMessage(message: Message): void {
 function showJoinButton(): void {
   if (g_overlay) return;
   const button = document.createElement("button");
-  button.textContent = "▶ Roll Together : clique ici pour rejoindre la lecture";
+  button.textContent = navigator.language.toLowerCase().startsWith("fr")
+    ? "▶ Roll With Your Friends : clique ici pour rejoindre la lecture"
+    : "▶ Roll With Your Friends: click here to join the playback";
   Object.assign(button.style, {
     position: "fixed",
     left: "50%",

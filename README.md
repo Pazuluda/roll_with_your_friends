@@ -1,4 +1,4 @@
-# Roll With Your Friends (Roll Together)
+# Roll With Your Friends
 
 Extension Firefox pour regarder Crunchyroll à plusieurs, chacun chez soi, parfaitement synchronisés :
 lecture, pause, skip d'opening et retours en arrière sont répercutés chez tout le monde.
@@ -8,17 +8,17 @@ la maintenance. Ce fork corrige la synchronisation sur le lecteur actuel de Crun
 
 ## Installer (Firefox)
 
-**[⬇️ Télécharger Roll Together 3.3.3 (signé par Mozilla)](https://addons.mozilla.org/firefox/downloads/file/5178345/d4fdb89d0bb0496b932e-3.3.3.xpi)**
+**[➡️ Roll With Your Friends sur addons.mozilla.org](https://addons.mozilla.org/firefox/addon/roll-with-your-friends/)**
+→ **« Ajouter à Firefox »**. Les mises à jour se font ensuite automatiquement.
 
-1. Si tu avais une ancienne version de Roll Together : `about:addons` → Roll Together → « … » → **Supprimer**.
-2. Clique sur le lien ci-dessus, puis sur **« Ajouter »**.
-   Si le fichier se télécharge au lieu de s'installer : fais-le glisser dans une fenêtre Firefox,
-   ou `about:addons` → roue dentée ⚙️ → **« Installer un module depuis un fichier… »**.
-3. Conseillé : sur crunchyroll.com, cadenas à gauche de l'adresse → **Lecture automatique** →
-   **« Autoriser l'audio et la vidéo »**. Sinon, un bouton orange « clique ici pour rejoindre la
-   lecture » s'affiche à ton arrivée : un clic suffit.
+Si tu avais Roll Together (l'original ou une version de test de ce fork) : `about:addons` →
+Roll Together → « … » → **Supprimer**, pour ne pas avoir deux extensions qui se gênent.
 
-Tout le monde dans le salon doit avoir **la même version** (3.3.3).
+Conseillé : sur crunchyroll.com, cadenas à gauche de l'adresse → **Lecture automatique** →
+**« Autoriser l'audio et la vidéo »**. Sinon, un bouton orange « clique ici pour rejoindre la
+lecture » s'affiche à ton arrivée : un clic suffit.
+
+Tout le monde dans le salon doit avoir l'extension, à jour.
 
 ## Utilisation
 
@@ -38,7 +38,7 @@ Tout le monde dans le salon doit avoir **la même version** (3.3.3).
 - **Lecteur figé** : le lecteur de Crunchyroll (Bitmovin) charge la vidéo lui-même. L'extension
   déplaçait directement la vidéo, sans passer par lui, et l'image se figeait.
 
-### Ce que fait la version 3.3
+### Ce que fait ce fork (version 3.3 et suivantes)
 - **Pilote le lecteur Crunchyroll lui-même pour les sauts** : l'extension retrouve le lecteur dans la
   page (`viewModelContainer` → `_player`) et lui demande de sauter, ce qui le fait charger
   correctement. Le premier saut est vérifié. Si le lecteur est introuvable, elle passe par les
@@ -94,6 +94,10 @@ console de la page tout ce qu'elle fait (`[sync]`, `[driver]`), ce qui aide à d
   → choisir un fichier du dossier `build-firefox`.
 - **Chrome** : `chrome://extensions` → Mode développeur → « Charger l'extension non empaquetée »
   → dossier `build`. Les corrections de ce fork n'ont été testées que sur Firefox.
+
+## Confidentialité
+Voir [PRIVACY.md](PRIVACY.md) : seuls l'identifiant du salon, l'état lecture/pause et la position
+de lecture sont envoyés au serveur de synchronisation. Pas de compte, pas de pub, pas de statistiques.
 
 ## Serveur de synchronisation
 L'extension utilise toujours le serveur de l'auteur d'origine (`rt-sync.azurewebsites.net`,
