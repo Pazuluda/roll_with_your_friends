@@ -25,7 +25,7 @@
     "storage",
     "*://www.crunchyroll.com/*",
     "*://static.crunchyroll.com/*",
-    "*://rt-sync.azurewebsites.net/*"
+    "*://rwyf-sync.onrender.com/*"
   ],
   "browser_action": {
     "default_popup": "popup.html",
