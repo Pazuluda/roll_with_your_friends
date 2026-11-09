@@ -1,0 +1,11 @@
+{
+  "name": "rwyf-sync",
+  "version": "1.0.0",
+  "description": "Serveur de synchronisation pour Roll With Your Friends (compatible Roll Together)",
+  "main": "server.js",
+  "private": true,
+  "license": "MIT",
+  "engines": { "node": ">=18" },
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "socket.io": "^4.8.1" }
+}
