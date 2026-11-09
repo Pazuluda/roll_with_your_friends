@@ -25,7 +25,7 @@
 	"host_permissions": [
 		"*://www.crunchyroll.com/*",
 		"*://static.crunchyroll.com/*",
-		"*://rt-sync.azurewebsites.net/*"
+		"*://rwyf-sync.onrender.com/*"
 	],
 	"action": {
 		"default_popup": "popup.html",
