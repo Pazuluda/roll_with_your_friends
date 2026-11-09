@@ -1,59 +1,117 @@
-# Privacy policy – Roll With Your Friends
+# Privacy Policy – Roll With Your Friends
 
-_Last updated: October 28, 2026_
+_Last updated: November 9, 2026_
 
 Roll With Your Friends synchronizes Crunchyroll playback between people who share a room link.
-It has no account, no advertising and no analytics.
 
-## What is sent, and to whom
-When you create or join a room, the extension connects to a synchronization server
-(`rt-sync.azurewebsites.net`, run by the author of the original Roll Together extension) and
-exchanges only:
-- the room identifier (a random code, also present in the shared link);
-- the playback state of the video ("playing" or "paused");
-- the playback position, in seconds.
+The extension does not require an account, display advertisements, or use analytics.
 
-These messages are relayed to the other people in the same room. Like any website, the server
-can see the IP address of the connection. The extension does not send your Crunchyroll account,
-your e-mail address, the title of the video, your browsing history or any other personal data.
+## Synchronization server
 
-The server keeps the state of a room only in memory, while at least one person is connected to it.
+The extension connects to a synchronization server operated by the Roll With Your Friends project and hosted by Render:
 
-## What stays on your computer
-- Your color preference for the extension's icon and buttons (Firefox sync storage).
-- Nothing else is stored.
+**https://rwyf-sync.onrender.com**
+
+The server is used exclusively to synchronize video playback between participants in the same room.
+
+## What data is transmitted
+
+When you create or join a room, the extension transmits:
+
+- The room identifier (a generated code included in the shared link).
+- The playback state ("playing" or "paused").
+- The playback position, in seconds.
+
+These messages are relayed to other participants in the same room.
+
+The extension does not transmit your Crunchyroll account credentials, email address, video title, or browsing history.
+
+## Data storage and retention
+
+Room synchronization data is stored temporarily in the server's memory while participants are connected.
+
+When the last participant disconnects, the room and its synchronization state are deleted from memory.
+
+The server does not use a persistent database to store rooms.
+
+Basic technical logs may record room identifiers and participant counts. The hosting provider, Render, may also process connection information, including IP addresses, and retain technical logs according to its policies.
+
+## Local storage
+
+The extension stores your selected icon and button color preference using Firefox synchronization storage.
+
+No account or personal profile is created by the extension.
+
+## Third-party hosting
+
+The synchronization server is hosted by Render.
+
+Render's privacy policy is available at:
+
+https://render.com/privacy
 
 ## Contact
-Questions or concerns: open an issue on
+
+For questions or privacy concerns, open an issue at:
+
 https://github.com/Pazuluda/roll_with_your_friends/issues
 
 ---
 
 # Politique de confidentialité – Roll With Your Friends
 
-_Dernière mise à jour : 28 octobre 2026_
+_Dernière mise à jour : 9 novembre 2026_
 
-Roll With Your Friends synchronise la lecture Crunchyroll entre les personnes qui partagent le lien
-d'un salon. Il n'y a ni compte, ni publicité, ni statistiques.
+Roll With Your Friends synchronise la lecture de Crunchyroll entre plusieurs personnes partageant le lien d'un salon.
 
-## Ce qui est envoyé, et à qui
-Quand tu crées ou rejoins un salon, l'extension se connecte à un serveur de synchronisation
-(`rt-sync.azurewebsites.net`, géré par l'auteur de l'extension d'origine Roll Together), et
-n'échange que :
-- l'identifiant du salon (un code aléatoire, présent aussi dans le lien partagé) ;
-- l'état de lecture de la vidéo (« en lecture » ou « en pause ») ;
-- la position de lecture, en secondes.
+L'extension ne nécessite aucun compte, n'affiche aucune publicité et n'utilise aucun outil d'analyse statistique.
 
-Ces messages sont relayés aux autres personnes du même salon. Comme pour tout site web, le serveur
-voit l'adresse IP de la connexion. L'extension n'envoie ni ton compte Crunchyroll, ni ton adresse
-e-mail, ni le titre de la vidéo, ni ton historique, ni aucune autre donnée personnelle.
+## Serveur de synchronisation
 
-Le serveur ne garde l'état d'un salon qu'en mémoire, tant qu'au moins une personne y est connectée.
+L'extension utilise désormais un serveur de synchronisation géré par le projet Roll With Your Friends et hébergé chez Render :
 
-## Ce qui reste sur ton ordinateur
-- Ta préférence de couleur pour l'icône et les boutons de l'extension (stockage Firefox).
-- Rien d'autre n'est enregistré.
+**https://rwyf-sync.onrender.com**
+
+Ce serveur sert exclusivement à synchroniser la lecture vidéo entre les participants d'un même salon.
+
+## Données transmises
+
+Lorsque tu crées ou rejoins un salon, l'extension transmet :
+
+- L'identifiant du salon (un code généré et présent dans le lien de partage).
+- L'état de lecture de la vidéo (« en lecture » ou « en pause »).
+- La position de lecture, en secondes.
+
+Ces informations sont transmises aux autres participants du même salon.
+
+L'extension ne transmet pas tes identifiants Crunchyroll, ton adresse e-mail, le titre de la vidéo ou ton historique de navigation.
+
+## Stockage et conservation des données
+
+Les données de synchronisation sont temporairement conservées dans la mémoire du serveur tant que des participants sont connectés.
+
+Lorsque le dernier participant quitte le salon, le salon et son état de synchronisation sont supprimés de la mémoire.
+
+Le serveur n'utilise aucune base de données persistante pour conserver les salons.
+
+Des journaux techniques élémentaires peuvent enregistrer les identifiants des salons et le nombre de participants. L'hébergeur Render peut également traiter des informations de connexion, notamment les adresses IP, et conserver des journaux techniques conformément à ses propres règles.
+
+## Stockage local
+
+L'extension conserve uniquement ta préférence de couleur pour son icône et ses boutons grâce au stockage synchronisé de Firefox.
+
+Aucun compte ou profil personnel n'est créé par l'extension.
+
+## Hébergement tiers
+
+Le serveur de synchronisation est hébergé chez Render.
+
+La politique de confidentialité de Render est disponible ici :
+
+https://render.com/privacy
 
 ## Contact
-Une question ? Ouvre un ticket sur
+
+Pour toute question concernant la confidentialité, ouvre un ticket sur :
+
 https://github.com/Pazuluda/roll_with_your_friends/issues
