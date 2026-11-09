@@ -100,9 +100,14 @@ Voir [PRIVACY.md](PRIVACY.md) : seuls l'identifiant du salon, l'état lecture/pa
 de lecture sont envoyés au serveur de synchronisation. Pas de compte, pas de pub, pas de statistiques.
 
 ## Serveur de synchronisation
-L'extension utilise toujours le serveur de l'auteur d'origine (`rt-sync.azurewebsites.net`,
-code : https://github.com/samuraiexx/roll_together_backend). S'il venait à s'arrêter, il faudrait
-héberger ce serveur et changer `SYNC_SERVER` dans `env.json`.
+Depuis la 3.4.2, l'extension utilise son propre serveur : `https://rwyf-sync.onrender.com`
+(code dans [`server/`](server/), déployé sur Render via [`render.yaml`](render.yaml)). Le serveur de
+l'auteur d'origine (`rt-sync.azurewebsites.net`) a disparu en novembre 2026. Le protocole est le même
+que celui de [roll_together_backend](https://github.com/samuraiexx/roll_together_backend) ; pour
+changer de serveur, modifier `SYNC_SERVER` dans `env.json` et les permissions des deux manifests.
+
+Offre gratuite de Render : le serveur s'endort après 15 min sans activité ; le premier salon
+qui suit peut mettre ~1 min à se créer.
 
 ## Remerciements
 Merci à l'auteur d'origine de Roll Together et à tous ses contributeurs.
