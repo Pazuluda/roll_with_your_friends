@@ -1,6 +1,6 @@
 {
   "name": "Roll With Your Friends",
-  "version": "3.4.1",
+  "version": "3.4.2",
   "homepage_url": "https://github.com/Pazuluda/roll_with_your_friends",
   "description": "Watch Crunchyroll with your friends, in sync: play, pause and skips are shared with everyone in the room.",
   "background": {
@@ -13,7 +13,7 @@
     {
       "all_frames": true,
       "matches": [
-				"*://www.crunchyroll.com/*",
+        "*://www.crunchyroll.com/*",
         "*://static.crunchyroll.com/*"
       ],
       "js": [
@@ -52,7 +52,9 @@
       "id": "roll-with-your-friends@pazuluda",
       "strict_min_version": "109.0",
       "data_collection_permissions": {
-        "required": ["websiteActivity"]
+        "required": [
+          "websiteActivity"
+        ]
       }
     }
   }
