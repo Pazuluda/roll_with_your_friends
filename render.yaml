@@ -1,0 +1,13 @@
+# Render Blueprint : serveur de synchronisation (dossier server/).
+# Render → New → Blueprint → ce dépôt.
+services:
+  - type: web
+    name: rwyf-sync
+    runtime: node
+    region: frankfurt
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /
+    autoDeploy: true
